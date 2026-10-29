@@ -183,6 +183,7 @@ def submit(request, course_id):
     )
 
 
+
 @login_required
 def show_exam_result(request, course_id, submission_id):
     course = get_object_or_404(Course, pk=course_id)
@@ -199,27 +200,42 @@ def show_exam_result(request, course_id, submission_id):
         selected_choices.values_list('id', flat=True)
     )
 
-    possible_score = 0
+    total_score = 0
     possible = 0
+    question_results = []
 
     for question in course.question_set.all():
         possible += question.grade
 
-        if question.is_get_score(selected_ids):
-            possible_score += question.grade
+        is_correct = question.is_get_score(selected_ids)
+
+        if is_correct:
+            total_score += question.grade
+
+        question_results.append({
+            'question': question,
+            'selected_choices': selected_choices.filter(
+                question=question
+            ),
+            'correct_choices': question.choice_set.filter(
+                is_correct=True
+            ),
+            'is_correct': is_correct,
+        })
 
     grade = 0
     if possible > 0:
-        grade = round((possible_score / possible) * 100)
+        grade = round((total_score / possible) * 100)
 
     context = {
         'course': course,
         'submission': submission,
         'grade': grade,
-        'possible_score': possible_score,
+        'total_score': total_score,
         'possible': possible,
         'selected_ids': selected_ids,
         'choices': selected_choices,
+        'question_results': question_results,
     }
 
     return render(
