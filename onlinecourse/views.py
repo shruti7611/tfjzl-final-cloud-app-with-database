@@ -5,9 +5,10 @@ from django.urls import reverse
 from django.views import generic
 from django.contrib.auth import login, logout, authenticate
 from django.contrib.auth.models import User
+from django.contrib.auth.decorators import login_required
 import logging
 
-from .models import Course, Enrollment, Submission
+from .models import Course, Enrollment, Submission, Choice
 
 logger = logging.getLogger(__name__)
 
@@ -135,11 +136,8 @@ def extract_answers(request):
 
     for key in request.POST:
         if key.startswith('choice'):
-            value = request.POST[key]
-
             try:
-                choice_id = int(value)
-                submitted_answers.append(choice_id)
+                submitted_answers.append(int(request.POST[key]))
             except (ValueError, TypeError):
                 continue
 
@@ -168,23 +166,24 @@ def submit(request, course_id):
         enrollment=enrollment
     )
 
-    choices = extract_answers(request)
+    submitted_ids = extract_answers(request)
 
-    # Only save choices that belong to questions in this course.
-    valid_choices = course.question_set.filter(
-        choice__id__in=choices
-    ).values_list('choice__id', flat=True).distinct()
+    valid_ids = Choice.objects.filter(
+        question__course=course,
+        id__in=submitted_ids
+    ).values_list('id', flat=True).distinct()
 
-    submission.choices.set(valid_choices)
+    submission.choices.set(valid_ids)
 
     return HttpResponseRedirect(
         reverse(
-            'onlinecourse:exam_result',
+            'onlinecourse:show_exam_result',
             args=(course.id, submission.id)
         )
     )
 
 
+@login_required
 def show_exam_result(request, course_id, submission_id):
     course = get_object_or_404(Course, pk=course_id)
 
@@ -196,39 +195,30 @@ def show_exam_result(request, course_id, submission_id):
     )
 
     selected_choices = submission.choices.all()
-    questions = course.question_set.all()
+    selected_ids = list(
+        selected_choices.values_list('id', flat=True)
+    )
 
-    total_score = 0
-    question_results = []
+    possible_score = 0
+    possible = 0
 
-    for question in questions:
-        correct_choices = question.choice_set.filter(
-            is_correct=True
-        )
+    for question in course.question_set.all():
+        possible += question.grade
 
-        selected_for_question = selected_choices.filter(
-            question=question
-        )
+        if question.is_get_score(selected_ids):
+            possible_score += question.grade
 
-        is_correct = (
-            set(correct_choices) == set(selected_for_question)
-        )
-
-        if is_correct:
-            total_score += question.grade
-
-        question_results.append({
-            'question': question,
-            'selected_choices': selected_for_question,
-            'correct_choices': correct_choices,
-            'is_correct': is_correct,
-        })
+    grade = 0
+    if possible > 0:
+        grade = round((possible_score / possible) * 100)
 
     context = {
         'course': course,
         'submission': submission,
-        'grade': total_score,
-        'question_results': question_results,
+        'grade': grade,
+        'possible_score': possible_score,
+        'possible': possible,
+        'selected_ids': selected_ids,
         'choices': selected_choices,
     }
 
